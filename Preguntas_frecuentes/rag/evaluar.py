@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 
-from cargar import cargar_pdf
-from limpiar import limpiar
-from trocear import trocear
-from embeddings import cargar_modelo, crear_embeddings
-from indice import buscar_exacto
+from Preguntas_frecuentes.rag.cargar import cargar_pdf
+from Preguntas_frecuentes.rag.limpiar import limpiar
+from Preguntas_frecuentes.rag.trocear import trocear
+from Preguntas_frecuentes.rag.embeddings import cargar_modelo, crear_embeddings
+from Preguntas_frecuentes.rag.indice import buscar_exacto
 
 """
 Mis resultados
@@ -33,28 +33,32 @@ def cargar_preguntas(ruta):
     return preguntas
 
 
-def recall_por_k(preguntas, chunks, vectores, modelo, k_maximo=10):
-    """Para cada k de 1 a k_maximo, % de preguntas cuyo artículo esperado sale en el top-k."""
-    aciertos = [0] * (k_maximo + 1)
-    v_pregunta = None
-    resultados = []
+def recall_por_k(ruta_preguntas, chunks, vectores, modelo, k_maximo=10):
+    vectores_preguntas = []
+    recalls = []
     ids_encontrados = []
+    preguntas = []
+    # 1. Convertir cada pregunta en vector
+    preguntas =cargar_preguntas(ruta_preguntas)
+    for pregunta  in preguntas:
+        v = modelo.encode(["query: " + pregunta[1]], normalize_embeddings=True)[0]
+        vectores_preguntas.append(v)
 
-    for pregunta, ids_esperados in preguntas:
-        v_pregunta = modelo.encode(["query: " + pregunta], normalize_embeddings=True)[0]
-        resultados = buscar_exacto(v_pregunta, vectores, k_maximo)
-
-        ids_encontrados = []
-        for similitud, posicion in resultados:
-            ids_encontrados.append(chunks[posicion].id)
-
-        for k in range(1, k_maximo + 1):
-            if ids_esperados[0] in ids_encontrados[:k]:
-                aciertos[k] += 1
-
-    print(" k | Recall@k")
+    # 2. Para cada k, recorrer las preguntas y contar cuántas aciertan
     for k in range(1, k_maximo + 1):
-        print(f"{k:2} | {aciertos[k] / len(preguntas):6.1%}")
+        aciertos = 0
+        for i in range(len(preguntas)):
+            esperado = preguntas[i][1][0] #pillo la pregunta, la segunda tupla con los id y como alguno tiene 2 cojo el texto de la primera posicion
+            resultados = buscar_exacto(vectores_preguntas[i], vectores, k)
+            for resultado in resultados:
+                ids_encontrados.append(chunks[resultado[1]].id)
+            if esperado in ids_encontrados:
+                aciertos += 1
+
+        recalls.append(aciertos / len(preguntas))         # el Recall de este k
+        print(f"k={k:2} | {aciertos} de {len(preguntas)} | {recalls[-1]:.1%}")
+
+    return recalls
 
 
 def main():
@@ -64,7 +68,6 @@ def main():
     vectores = None
     preguntas = []
 
-    # Lo que ya tienes: PDFs → chunks → vectores
     for ruta in sorted(Path("../datos").glob("*.pdf")):
         lineas = cargar_pdf(ruta)
         lineas = limpiar(lineas)
@@ -72,10 +75,8 @@ def main():
 
     modelo = cargar_modelo()
     vectores = crear_embeddings(chunks, modelo)
-
-    # Lo nuevo: medir
-    preguntas = cargar_preguntas("../evaluacion/casos_desarrollo.jsonl")
-    recall_por_k(preguntas, chunks, vectores, modelo)
+    ruta = "../evaluacion/casos_desarrollo.jsonl"
+    recall_por_k(ruta, chunks, vectores, modelo)
 
 
 if __name__ == "__main__":
